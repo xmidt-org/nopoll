@@ -86,6 +86,23 @@ int main()
 AM_CONDITIONAL(ENABLE_EPOLL_SUPPORT, test "x$enable_cv_epoll" = "xyes")
 
 dnl select the best I/O platform
+
+have_epoll=""
+if test x$enable_cv_epoll = xyes; then
+   export have_epoll="/**
+ * @brief Indicates where we have support for epoll.
+ */
+#define NOPOLL_HAVE_EPOLL (1)"
+fi
+
+have_poll=""
+if test x$enable_poll = xyes; then
+   export have_poll="/**
+ * @brief Indicates where we have support for poll.
+ */
+#define NOPOLL_HAVE_POLL (1)"
+fi
+
 if test x$enable_cv_epoll = xyes ; then
    default_platform="epoll"
 elif test x$enable_poll = xyes ; then
@@ -335,6 +352,10 @@ $nopoll_platform
 $vasprintf_status
 
 $have_64bit_support
+
+$have_epoll
+
+$have_poll
 
 $ssl_sslv23_header
 

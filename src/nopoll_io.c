@@ -40,9 +40,8 @@
 
 typedef struct _noPollSelect {
 	noPollCtx          * ctx;
-	fd_set               set;
+	struct pollfd      * fd_table;
 	int                  length;
-	int                  max_fds;
 } noPollSelect;
 
 /** 
@@ -57,9 +56,6 @@ noPollPtr nopoll_io_wait_select_create (noPollCtx * ctx)
 
 	/* set default behaviour expected for the set */
 	select->ctx           = ctx;
-	
-	/* clear the set */
-	FD_ZERO (&(select->set));
 
 	return select;
 }
@@ -70,12 +66,13 @@ noPollPtr nopoll_io_wait_select_create (noPollCtx * ctx)
  * 
  * @param fd_group The fd group to be deallocated.
  */
-void    nopoll_io_wait_select_destroy (noPollCtx * ctx, noPollPtr fd_group)
+void    nopoll_io_wait_select_destroy (noPollCtx * ctx, noPollPtr __fd_group)
 {
-	fd_set * __fd_set = (fd_set *) fd_group;
+	noPollSelect * select = (noPollSelect *) __fd_group;
 
 	/* release memory allocated */
-	nopoll_free (__fd_set);
+	nopoll_free (select->fd_table);
+	nopoll_free (select);
 	
 	/* nothing more to do */
 	return;
@@ -92,8 +89,9 @@ void    nopoll_io_wait_select_clear (noPollCtx * ctx, noPollPtr __fd_group)
 	noPollSelect * select = (noPollSelect *) __fd_group;
 
 	/* clear the fd set */
+	nopoll_free (select->fd_table);
+	select->fd_table = NULL;
 	select->length = 0;
-	FD_ZERO (&(select->set));
 
 	/* nothing more to do */
 	return;
@@ -112,13 +110,10 @@ void    nopoll_io_wait_select_clear (noPollCtx * ctx, noPollPtr __fd_group)
 int nopoll_io_wait_select_wait (noPollCtx * ctx, noPollPtr __fd_group)
 {
 	int                 result = -1;
-	struct timeval      tv;
 	noPollSelect     * _select = (noPollSelect *) __fd_group;
 
 	/* init wait */
-	tv.tv_sec    = 0;
-	tv.tv_usec   = 500000;
-	result       = select (_select->max_fds + 1, &(_select->set), NULL,   NULL, &tv);
+	result	     = poll (_select->fd_table, _select->length, 500);
 
 	/* check result */
 	if ((result == NOPOLL_SOCKET_ERROR) && (errno == NOPOLL_EINTR))
@@ -138,30 +133,29 @@ int nopoll_io_wait_select_wait (noPollCtx * ctx, noPollPtr __fd_group)
 nopoll_bool  nopoll_io_wait_select_add_to (int               fds, 
 					   noPollCtx       * ctx,
 					   noPollConn      * conn,
-					   noPollPtr         __fd_set)
+					   noPollPtr         __fd_group)
 {
-	noPollSelect * select = (noPollSelect *) __fd_set;
+	noPollSelect * select = (noPollSelect *) __fd_group;
+	struct pollfd * fd_table;
+	struct pollfd * poll_fd;
 
-	if (fds < 0 || fds >= FD_SETSIZE) {
+	if (fds < 0) {
 		nopoll_log (ctx, NOPOLL_LEVEL_CRITICAL,
 			    "received a non valid socket (%d), unable to add to the set", fds);
 		return nopoll_false;
 	}
-	if ((select->length - 1) > FD_SETSIZE) {
-		nopoll_log (ctx, NOPOLL_LEVEL_CRITICAL,
-			    "Unable to add requested socket (%d), reached max FD_SETSIZE=%d (select->length=%d)", fds, FD_SETSIZE, select->length);
-		return nopoll_false;
-	} /* end if */	
-
-	/* set the value */
-	FD_SET (fds, &(select->set));
 
 	/* update length */
 	select->length++;
 
-	/* update max fds */
-	if (fds > select->max_fds)
-		select->max_fds = fds;
+	/* set the value */
+	select->fd_table = nopoll_realloc (select->fd_table,
+		select->length * sizeof(struct pollfd));
+	fd_table = select->fd_table;
+	poll_fd = &fd_table[select->length-1];
+	poll_fd->fd = fds;
+	poll_fd->events = POLLIN;
+	poll_fd->revents = 0;
 
 	return nopoll_true;
 }
@@ -179,17 +173,22 @@ nopoll_bool  nopoll_io_wait_select_add_to (int               fds,
  */
 nopoll_bool      nopoll_io_wait_select_is_set (noPollCtx   * ctx,
 					       int           fds, 
-					       noPollPtr      __fd_set)
+					       noPollPtr      __fd_group)
 {
-	noPollSelect * select = (noPollSelect *) __fd_set;
+	noPollSelect  * select = (noPollSelect *) __fd_group;
+	struct pollfd * fd_table = select->fd_table;
+	int i;
 	
-	if (fds < 0 || fds >= FD_SETSIZE) {
+	if (fds < 0) {
 		nopoll_log (ctx, NOPOLL_LEVEL_CRITICAL,
 			    "received a non valid socket (%d), unable to test in the set", fds);
 		return nopoll_false;
 	}
 
-	return FD_ISSET (fds, &(select->set));
+	for (i=0; i<select->length; i++)
+		if (fds == fd_table[i].fd)
+			return (nopoll_bool) (fd_table[i].revents & POLLIN);
+	return nopoll_false;
 }
 
 
